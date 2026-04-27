@@ -528,6 +528,14 @@ app.post("/api/analyze-video", upload.single("video"), async (req, res) => {
     const sport = (req.body?.sport ?? req.query?.sport ?? "Tennis").toString().trim() || "Tennis";
     const requestedModel = typeof req.body?.model === "string" ? req.body.model.trim() : "";
     const model = requestedModel || AI_MODEL;
+    const bodyProfile = {
+      heightCm: typeof req.body?.height_cm === "string" ? req.body.height_cm.trim() : "",
+      weightKg: typeof req.body?.weight_kg === "string" ? req.body.weight_kg.trim() : "",
+      chestCm: typeof req.body?.chest_cm === "string" ? req.body.chest_cm.trim() : "",
+      waistCm: typeof req.body?.waist_cm === "string" ? req.body.waist_cm.trim() : "",
+      hipCm: typeof req.body?.hip_cm === "string" ? req.body.hip_cm.trim() : "",
+      armSpanCm: typeof req.body?.arm_span_cm === "string" ? req.body.arm_span_cm.trim() : ""
+    };
 
     const inputVideo = await materializeVideoPathForFfmpeg(req.file);
     if (inputVideo && inputVideo !== req.file.path) {
@@ -569,7 +577,8 @@ app.post("/api/analyze-video", upload.single("video"), async (req, res) => {
       sport,
       file: req.file,
       frames,
-      note
+      note,
+      bodyProfile
     });
 
     res.json(responsePayload);
@@ -596,7 +605,7 @@ app.post("/api/analyze-video", upload.single("video"), async (req, res) => {
   }
 });
 
-async function analyzeWithCompatibleVisionModel({ apiKey, model, sport, file, frames, note }) {
+async function analyzeWithCompatibleVisionModel({ apiKey, model, sport, file, frames, note, bodyProfile }) {
   const isTennis = (sport || "").trim().toLowerCase() === "tennis";
 
   if (frames.length === 0) {
@@ -605,11 +614,13 @@ async function analyzeWithCompatibleVisionModel({ apiKey, model, sport, file, fr
       : buildGenericNoVideoFramesResponse(sport, note);
   }
 
+  const bodyProfileLine = formatBodyProfileForPrompt(bodyProfile);
   const metadataText = [
     `Original filename: ${file.originalname || "unknown"}`,
     `Uploaded mime type: ${file.mimetype || "unknown"}`,
     `Uploaded size bytes: ${file.size || 0}`,
-    note ? `Frame extraction note: ${note}` : null
+    note ? `Frame extraction note: ${note}` : null,
+    bodyProfileLine
   ]
     .filter(Boolean)
     .join("\n");
@@ -690,6 +701,23 @@ async function analyzeWithCompatibleVisionModel({ apiKey, model, sport, file, fr
   }
 
   return normalizeAnalysisPayload(parsed, sport, note, frames.length);
+}
+
+function formatBodyProfileForPrompt(bodyProfile) {
+  if (!bodyProfile || typeof bodyProfile !== "object") {
+    return null;
+  }
+  const parts = [];
+  if (bodyProfile.heightCm) parts.push(`height ${bodyProfile.heightCm} cm`);
+  if (bodyProfile.weightKg) parts.push(`weight ${bodyProfile.weightKg} kg`);
+  if (bodyProfile.chestCm) parts.push(`chest ${bodyProfile.chestCm} cm`);
+  if (bodyProfile.waistCm) parts.push(`waist ${bodyProfile.waistCm} cm`);
+  if (bodyProfile.hipCm) parts.push(`hip ${bodyProfile.hipCm} cm`);
+  if (bodyProfile.armSpanCm) parts.push(`arm span ${bodyProfile.armSpanCm} cm`);
+  if (parts.length === 0) {
+    return null;
+  }
+  return `Athlete body profile (self-reported): ${parts.join(", ")}. Use this only to tailor drills/load and movement constraints; do not infer medical conditions.`;
 }
 
 /**
@@ -1293,6 +1321,10 @@ function cleanUserFacingText(value) {
     .trim();
 }
 
-app.listen(PORT, () => {
-  console.log(`MoveMatch AI Node backend listening on http://127.0.0.1:${PORT}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`MoveMatch AI Node backend listening on http://127.0.0.1:${PORT}`);
+  });
+}
+
+module.exports = app;
