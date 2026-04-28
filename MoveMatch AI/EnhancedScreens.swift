@@ -615,6 +615,7 @@ struct EnhancedProfileView: View {
                             .foregroundStyle(MoveMatchPalette.textOnCardMuted)
                             .lineLimit(1)
                     }
+                    .foregroundStyle(MoveMatchPalette.textOnCard)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
                     .background(Color(red: 0.94, green: 0.95, blue: 0.97))
@@ -2154,7 +2155,7 @@ struct EnhancedCoachesView: View {
                         Text(tab.rawValue)
                     }
                     .font(.subheadline.weight(.bold))
-                    .foregroundStyle(activeTab == tab ? .primary : MoveMatchPalette.textSecondary)
+                    .foregroundStyle(activeTab == tab ? MoveMatchPalette.textOnCard : MoveMatchPalette.textSecondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(activeTab == tab ? .white : Color.gray.opacity(0.08))
@@ -2214,7 +2215,7 @@ struct EnhancedCoachesView: View {
                         } label: {
                             Text(sport == "all" ? "All Sports" : sport.capitalized)
                                 .font(.caption.weight(.bold))
-                                .foregroundStyle(selectedSport == sport ? .white : .primary)
+                                .foregroundStyle(selectedSport == sport ? .white : MoveMatchPalette.textOnCard)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 10)
                                 .background(selectedSport == sport ? MoveMatchPalette.primary : .white)
@@ -2665,7 +2666,7 @@ private struct CoachBookingSheet: View {
                     } label: {
                         Text(option)
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(selection.wrappedValue == option ? MoveMatchPalette.primaryDark : .primary)
+                            .foregroundStyle(selection.wrappedValue == option ? MoveMatchPalette.primaryDark : MoveMatchPalette.textOnCard)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
                             .padding(.horizontal, 6)
@@ -3116,7 +3117,7 @@ struct EnhancedCompeteView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(athlete.name + (athlete.isMe ? " (You)" : ""))
                                 .font(.headline)
-                                .foregroundStyle(athlete.isMe ? MoveMatchPalette.primaryDark : .primary)
+                                .foregroundStyle(athlete.isMe ? MoveMatchPalette.primaryDark : MoveMatchPalette.textOnCard)
                             Text("\(athlete.sport) · \(athlete.wins) wins")
                                 .font(.caption)
                                 .foregroundStyle(MoveMatchPalette.textSecondary)
@@ -3547,9 +3548,14 @@ private struct CompeteDetailSheet: View {
             }
             .background(MoveMatchPalette.background.ignoresSafeArea())
             .navigationTitle("Intro")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(Color.white, for: .navigationBar)
+            .toolbarColorScheme(.light, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(MoveMatchPalette.primaryDark)
                 }
             }
         }
@@ -3839,7 +3845,7 @@ struct EnhancedCommunityView: View {
                                     )
                                 Text(story.name)
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(selectedStorySeed == story.avatarSeed ? MoveMatchPalette.primaryDark : .primary)
+                                    .foregroundStyle(selectedStorySeed == story.avatarSeed ? MoveMatchPalette.primaryDark : MoveMatchPalette.textOnCard)
                             }
                         }
                         .buttonStyle(.plain)
@@ -4305,15 +4311,21 @@ private struct CommunityChallengeDetailSheet: View {
                 .padding(20)
             }
             .navigationTitle("Challenge Intro")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(Color.white, for: .navigationBar)
+            .toolbarColorScheme(.light, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(MoveMatchPalette.textOnCard)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(joined ? "Joined" : "Join") {
                         onToggleJoin()
                         dismiss()
                     }
+                    .foregroundStyle(MoveMatchPalette.primaryDark)
                 }
             }
         }
