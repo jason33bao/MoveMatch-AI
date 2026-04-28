@@ -104,11 +104,18 @@ async function getVideoDurationSeconds(videoPath) {
   return null;
 }
 
-const PORT = Number(process.env.PORT || 3001);
-const AI_MODEL = process.env.AI_MODEL || "qwen3-vl-plus";
+const PORT = Number(process.env.PORT || 3000);
+const AI_MODEL = process.env.AI_MODEL || "glm-4.6v";
+const AI_FALLBACK_MODEL = process.env.AI_FALLBACK_MODEL || "";
+const ALLOW_CLIENT_MODEL_OVERRIDE = String(process.env.ALLOW_CLIENT_MODEL_OVERRIDE || "").toLowerCase() === "true";
 const AI_API_KEY = process.env.AI_API_KEY || "";
-const AI_BASE_URL = (process.env.AI_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/, "");
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "*")
+const AI_BASE_URL = (process.env.AI_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, "");
+const DEFAULT_ALLOWED_ORIGINS = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "https://movematch-ai-1.onrender.com"
+];
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(","))
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
@@ -477,6 +484,10 @@ async function materializeVideoPathForFfmpeg(file) {
   return withExt;
 }
 
+app.get("/", (_req, res) => {
+  res.send("MoveMatch AI backend is running");
+});
+
 app.get("/health", async (_req, res) => {
   const ff = getFfmpegPath();
   const fp = getFfprobePath();
@@ -496,6 +507,7 @@ app.get("/health", async (_req, res) => {
   }
   res.json({
     status: "ok",
+    service: "MoveMatch AI backend",
     provider: "compatible-vlm",
     model: AI_MODEL,
     ffmpeg: ffmpegOk ? path.basename(ff) : "not found",
@@ -505,7 +517,63 @@ app.get("/health", async (_req, res) => {
   });
 });
 
-app.post("/api/analyze-video", upload.single("video"), async (req, res) => {
+app.get("/debug/model-access", async (_req, res) => {
+  if (!AI_API_KEY) {
+    return res.status(500).json({
+      status: "error",
+      model: AI_MODEL,
+      message: "AI_API_KEY is missing on the backend."
+    });
+  }
+
+  try {
+    const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          {
+            role: "user",
+            content: "Reply with exactly OK."
+          }
+        ],
+        temperature: 0
+      })
+    });
+
+    const rawText = await response.text();
+    const payload = tryParseJson(rawText);
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        status: "error",
+        model: AI_MODEL,
+        httpStatus: response.status,
+        message: extractCompatibleApiError(response.status, payload, rawText)
+      });
+    }
+
+    const replyText = payload?.choices?.[0]?.message?.content;
+    return res.json({
+      status: "ok",
+      model: AI_MODEL,
+      upstreamStatus: response.status,
+      replyPreview: typeof replyText === "string" ? replyText.slice(0, 120) : ""
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: "error",
+      model: AI_MODEL,
+      message: error?.message || "Unknown error while probing model access."
+    });
+  }
+});
+
+async function handleAnalyzeVideo(req, res) {
   const tempPathsToDelete = [];
 
   try {
@@ -527,7 +595,9 @@ app.post("/api/analyze-video", upload.single("video"), async (req, res) => {
 
     const sport = (req.body?.sport ?? req.query?.sport ?? "Tennis").toString().trim() || "Tennis";
     const requestedModel = typeof req.body?.model === "string" ? req.body.model.trim() : "";
-    const model = requestedModel || AI_MODEL;
+    // Keep production predictable: by default use Render env AI_MODEL only.
+    // Optional override is available for debugging via ALLOW_CLIENT_MODEL_OVERRIDE=true.
+    const model = ALLOW_CLIENT_MODEL_OVERRIDE && requestedModel ? requestedModel : AI_MODEL;
     const bodyProfile = {
       heightCm: typeof req.body?.height_cm === "string" ? req.body.height_cm.trim() : "",
       weightKg: typeof req.body?.weight_kg === "string" ? req.body.weight_kg.trim() : "",
@@ -603,7 +673,10 @@ app.post("/api/analyze-video", upload.single("video"), async (req, res) => {
       }
     }
   }
-});
+}
+
+app.post("/api/analyze-video", upload.single("video"), handleAnalyzeVideo);
+app.post("/api/analyze", upload.single("video"), handleAnalyzeVideo);
 
 async function analyzeWithCompatibleVisionModel({ apiKey, model, sport, file, frames, note, bodyProfile }) {
   const isTennis = (sport || "").trim().toLowerCase() === "tennis";
@@ -629,53 +702,91 @@ async function analyzeWithCompatibleVisionModel({ apiKey, model, sport, file, fr
     ? tennisRatingSystemPrompt(frames.length, note)
     : promptForNonTennis(sport, frames.length, note);
 
-  const response = await fetch(
-    `${AI_BASE_URL}/chat/completions`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model,
-        response_format: {
-          type: "json_object"
+  async function requestOnce(modelName) {
+    const response = await fetch(
+      `${AI_BASE_URL}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`
         },
-        messages: [
-          {
-            role: "system",
-            content: systemContent
+        body: JSON.stringify({
+          model: modelName,
+          response_format: {
+            type: "json_object"
           },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: metadataText
-              },
-              ...frames.map((frame) => ({
-                type: "image_url",
-                image_url: {
-                  url: `data:${frame.mimeType};base64,${frame.base64}`
-                }
-              }))
-            ]
-          }
-        ],
-        temperature: isTennis ? 0.1 : 0.2
-      })
-    }
-  );
+          messages: [
+            {
+              role: "system",
+              content: systemContent
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: metadataText
+                },
+                ...frames.map((frame) => ({
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${frame.mimeType};base64,${frame.base64}`
+                  }
+                }))
+              ]
+            }
+          ],
+          temperature: isTennis ? 0.1 : 0.2
+        })
+      }
+    );
 
-  const rawResponseText = await response.text();
-  const responseJson = tryParseJson(rawResponseText);
-
-  if (!response.ok) {
-    throw new Error(extractCompatibleApiError(response.status, responseJson, rawResponseText));
+    const rawResponseText = await response.text();
+    const responseJson = tryParseJson(rawResponseText);
+    return { response, rawResponseText, responseJson, modelName };
   }
 
-  const rawContent = responseJson?.choices?.[0]?.message?.content;
+  const primaryAttempt = await requestOnce(model);
+  let successful = primaryAttempt;
+
+  if (!primaryAttempt.response.ok) {
+    const canFallback =
+      shouldRetryWithFallback(primaryAttempt.response.status, primaryAttempt.responseJson, primaryAttempt.rawResponseText) &&
+      AI_FALLBACK_MODEL &&
+      AI_FALLBACK_MODEL !== model;
+
+    if (!canFallback) {
+      throw new Error(
+        extractCompatibleApiError(
+          primaryAttempt.response.status,
+          primaryAttempt.responseJson,
+          primaryAttempt.rawResponseText
+        )
+      );
+    }
+
+    console.warn(`[analyze-video] primary model "${model}" unavailable, retrying with fallback "${AI_FALLBACK_MODEL}"`);
+    const fallbackAttempt = await requestOnce(AI_FALLBACK_MODEL);
+
+    if (!fallbackAttempt.response.ok) {
+      const primaryMessage = extractCompatibleApiError(
+        primaryAttempt.response.status,
+        primaryAttempt.responseJson,
+        primaryAttempt.rawResponseText
+      );
+      const fallbackMessage = extractCompatibleApiError(
+        fallbackAttempt.response.status,
+        fallbackAttempt.responseJson,
+        fallbackAttempt.rawResponseText
+      );
+      throw new Error(`${primaryMessage} | Fallback "${AI_FALLBACK_MODEL}" failed: ${fallbackMessage}`);
+    }
+
+    successful = fallbackAttempt;
+  }
+
+  const rawContent = successful.responseJson?.choices?.[0]?.message?.content;
   const outputText = Array.isArray(rawContent)
     ? rawContent
         .map((part) => (typeof part === "string" ? part : part?.text || ""))
@@ -701,6 +812,31 @@ async function analyzeWithCompatibleVisionModel({ apiKey, model, sport, file, fr
   }
 
   return normalizeAnalysisPayload(parsed, sport, note, frames.length);
+}
+
+function shouldRetryWithFallback(status, responseJson, rawText) {
+  if (status !== 404 && status !== 400) {
+    return false;
+  }
+  const combined = [
+    responseJson?.error?.message,
+    responseJson?.message,
+    responseJson?.detail,
+    responseJson?.error?.code,
+    responseJson?.code,
+    rawText
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    combined.includes("model_not_found") ||
+    combined.includes("model not found") ||
+    combined.includes("does not exist") ||
+    combined.includes("no access") ||
+    combined.includes("not access")
+  );
 }
 
 function formatBodyProfileForPrompt(bodyProfile) {
